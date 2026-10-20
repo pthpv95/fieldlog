@@ -1,0 +1,10 @@
+{
+  "name": "@fieldlog/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "android": "echo 'React Native mobile app - see roadmap in root README'",
+    "ios": "echo 'React Native mobile app - see roadmap in root README'",
+    "start": "echo 'React Native mobile app - see roadmap in root README'"
+  }
+}
