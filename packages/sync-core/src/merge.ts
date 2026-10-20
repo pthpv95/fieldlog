@@ -22,14 +22,17 @@ export interface MergeResult<T = unknown> {
  * 
  * Rules:
  * 1. The field with the higher HLC always wins
- * 2. When a conflict occurs (both sides modified the same field), the losing value
+ * 2. When HLCs are equal, use device ID for deterministic tie-breaking
+ * 3. When a conflict occurs (both sides modified the same field), the losing value
  *    is captured in the result for conflict logging
- * 3. This function is pure and deterministic - same inputs always produce same output
- * 4. Convergence property: merge(A, B) and merge(B, A) converge to the same final state
+ * 4. This function is pure and deterministic - same inputs always produce same output
+ * 5. Convergence property: merge(A, B) and merge(B, A) converge to the same final state
  */
 export function mergeField<T>(
   local: FieldValue<T> | undefined,
-  remote: FieldValue<T> | undefined
+  remote: FieldValue<T> | undefined,
+  localDeviceId?: string,
+  remoteDeviceId?: string
 ): MergeResult<T> | undefined {
   if (!local && !remote) {
     return undefined;
@@ -54,6 +57,22 @@ export function mergeField<T>(
   const cmp = compare(local.hlc, remote.hlc);
   
   if (cmp === 0) {
+    if (localDeviceId && remoteDeviceId && localDeviceId !== remoteDeviceId) {
+      const tieBreak = localDeviceId < remoteDeviceId ? 1 : -1;
+      if (tieBreak > 0) {
+        return {
+          value: local.value,
+          hlc: local.hlc,
+          hadConflict: false,
+        };
+      } else {
+        return {
+          value: remote.value,
+          hlc: remote.hlc,
+          hadConflict: false,
+        };
+      }
+    }
     return {
       value: local.value,
       hlc: local.hlc,

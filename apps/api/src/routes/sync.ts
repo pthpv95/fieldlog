@@ -181,7 +181,13 @@ async function processMutation(
 ): Promise<PushResponse['results'][0]> {
   const requestHash = crypto
     .createHash('sha256')
-    .update(JSON.stringify(mutation.fields))
+    .update(JSON.stringify({
+      entity: mutation.entity,
+      entityId: mutation.entityId,
+      op: mutation.op,
+      fields: mutation.fields,
+      baseVersion: mutation.baseVersion,
+    }))
     .digest('hex');
 
   const existingIdempotency = await prisma.idempotencyRecord.findUnique({
@@ -221,6 +227,8 @@ async function patchInspection(
   requestHash: string
 ): Promise<PushResponse['results'][0]> {
   return await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${mutation.entityId.split('-')[0]}::int8)`;
+    
     const inspection = await tx.inspection.findUnique({
       where: { id: mutation.entityId },
     });
@@ -268,7 +276,7 @@ async function patchInspection(
           }
         : undefined;
 
-      const mergeResult = mergeField(serverField, clientField);
+      const mergeResult = mergeField(serverField, clientField, 'server', deviceId);
 
       if (mergeResult) {
         updatedFields[fieldName] = mergeResult.value;

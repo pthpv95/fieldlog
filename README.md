@@ -502,6 +502,8 @@ This is a **portfolio project** to demonstrate offline-first mobile architecture
 - **No tile pack management**: Offline map tiles (MapLibre) are a roadmap item
 - **Photo storage**: MinIO (S3-compatible) is used; production would use AWS S3 or GCS
 - **Camera + GPS**: Photo capture and GPS-stamping are roadmap items
+- **Pull-side conflict merging**: When pulling changes, if local has pending edits, they should be merged field-by-field; currently we skip the row entirely (roadmap)
+- **Change-log advisory lock**: Currently uses advisory lock per entity ID hash; production should use per-org lock to guarantee ordering
 
 ---
 

@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { outbox, inspections } from '../db/schema';
-import { eq, and, or, lte } from 'drizzle-orm';
+import { outbox, inspections, syncMeta } from '../db/schema';
+import { eq, and, or, lte, isNull } from 'drizzle-orm';
 import {
   recordFailure,
   resetRetryState,
@@ -43,7 +43,7 @@ export async function sync(apiBaseUrl: string, deviceId: string, schemaVersion: 
   try {
     await pushOutbox(apiBaseUrl, deviceId, schemaVersion);
 
-    await pullChanges(apiBaseUrl);
+    await pullChanges(apiBaseUrl, deviceId);
 
     setSyncStatus({ state: 'success', syncedAt: Date.now() });
     return { success: true };
@@ -66,8 +66,8 @@ async function pushOutbox(apiBaseUrl: string, deviceId: string, schemaVersion: n
       and(
         eq(outbox.status, 'pending'),
         or(
-          lte(outbox.nextAttemptAt, new Date(now)),
-          eq(outbox.nextAttemptAt, null)
+          isNull(outbox.nextAttemptAt),
+          lte(outbox.nextAttemptAt, new Date(now))
         )
       )
     )
@@ -99,9 +99,11 @@ async function pushOutbox(apiBaseUrl: string, deviceId: string, schemaVersion: n
     mutations,
   };
 
-  await db.update(outbox).set({ status: 'inflight' }).where(
-    eq(outbox.mutationId, mutations[0].mutationId)
-  );
+  for (const mutation of mutations) {
+    await db.update(outbox).set({ status: 'inflight' }).where(
+      eq(outbox.mutationId, mutation.mutationId)
+    );
+  }
 
   const response = await fetch(`${apiBaseUrl}/sync/push`, {
     method: 'POST',
@@ -137,7 +139,7 @@ async function pushOutbox(apiBaseUrl: string, deviceId: string, schemaVersion: n
     if (result.status === 'applied' || result.status === 'merged' || result.status === 'duplicate') {
       await db.delete(outbox).where(eq(outbox.mutationId, result.mutationId));
       
-      const mutation = mutations.find(m => m.mutationId === result.mutationId);
+      const mutation = mutations.find((m: any) => m.mutationId === result.mutationId);
       if (mutation && result.version) {
         if (mutation.entity === 'inspection') {
           await db
@@ -171,8 +173,14 @@ async function pushOutbox(apiBaseUrl: string, deviceId: string, schemaVersion: n
   }
 }
 
-async function pullChanges(apiBaseUrl: string) {
+async function pullChanges(apiBaseUrl: string, deviceId: string) {
   let cursor: string | number | null = null;
+  
+  const cursorResult = await db.select().from(syncMeta).where(eq(syncMeta.key, `pull_cursor_${deviceId}`)).limit(1);
+  if (cursorResult.length > 0) {
+    cursor = cursorResult[0].value ? JSON.parse(cursorResult[0].value) : null;
+  }
+  
   let hasMore = true;
 
   while (hasMore) {
@@ -193,59 +201,76 @@ async function pullChanges(apiBaseUrl: string) {
 
     const pullResponse: PullResponse = await response.json();
 
-    for (const change of pullResponse.changes) {
-      if (change.entity === 'inspection') {
-        const hasPendingChanges = await db
-          .select()
-          .from(outbox)
-          .where(
-            and(
-              eq(outbox.entity, 'inspection'),
-              eq(outbox.entityId, change.entityId),
-              eq(outbox.status, 'pending')
+    await db.transaction(async (tx: any) => {
+      for (const change of pullResponse.changes) {
+        if (change.entity === 'inspection') {
+          const hasPendingChanges = await tx
+            .select()
+            .from(outbox)
+            .where(
+              and(
+                eq(outbox.entity, 'inspection'),
+                eq(outbox.entityId, change.entityId),
+                eq(outbox.status, 'pending')
+              )
             )
-          )
-          .limit(1);
+            .limit(1);
 
-        if (hasPendingChanges.length === 0) {
-          await db
-            .insert(inspections)
-            .values({
-              id: change.row.id as string,
-              orgId: change.row.orgId as string,
-              blockId: change.row.blockId as string,
-              inspectorId: change.row.inspectorId as string,
-              status: change.row.status as string,
-              fruitStage: change.row.fruitStage as string | null,
-              overallScore: change.row.overallScore as number | null,
-              notes: change.row.notes as string | null,
-              startedAt: new Date(change.row.startedAt as string),
-              submittedAt: change.row.submittedAt ? new Date(change.row.submittedAt as string) : null,
-              reviewedById: change.row.reviewedById as string | null,
-              reviewedAt: change.row.reviewedAt ? new Date(change.row.reviewedAt as string) : null,
-              fieldClocks: JSON.stringify(change.row.fieldClocks || {}),
-              version: change.version,
-              serverVersion: change.version,
-              syncState: 'synced',
-              createdAt: new Date(change.row.createdAt as string),
-              updatedAt: new Date(change.row.updatedAt as string),
-              deletedAt: change.row.deletedAt ? new Date(change.row.deletedAt as string) : null,
-            })
-            .onConflictDoUpdate({
-              target: inspections.id,
-              set: {
+          if (hasPendingChanges.length === 0) {
+            await tx
+              .insert(inspections)
+              .values({
+                id: change.row.id as string,
+                orgId: change.row.orgId as string,
+                blockId: change.row.blockId as string,
+                inspectorId: change.row.inspectorId as string,
                 status: change.row.status as string,
-                notes: change.row.notes as string | null,
-                overallScore: change.row.overallScore as number | null,
                 fruitStage: change.row.fruitStage as string | null,
+                overallScore: change.row.overallScore as number | null,
+                notes: change.row.notes as string | null,
+                startedAt: new Date(change.row.startedAt as string),
+                submittedAt: change.row.submittedAt ? new Date(change.row.submittedAt as string) : null,
+                reviewedById: change.row.reviewedById as string | null,
+                reviewedAt: change.row.reviewedAt ? new Date(change.row.reviewedAt as string) : null,
+                fieldClocks: JSON.stringify(change.row.fieldClocks || {}),
+                version: change.version,
                 serverVersion: change.version,
                 syncState: 'synced',
+                createdAt: new Date(change.row.createdAt as string),
                 updatedAt: new Date(change.row.updatedAt as string),
-              },
-            });
+                deletedAt: change.row.deletedAt ? new Date(change.row.deletedAt as string) : null,
+              })
+              .onConflictDoUpdate({
+                target: inspections.id,
+                set: {
+                  status: change.row.status as string,
+                  notes: change.row.notes as string | null,
+                  overallScore: change.row.overallScore as number | null,
+                  fruitStage: change.row.fruitStage as string | null,
+                  serverVersion: change.version,
+                  syncState: 'synced',
+                  updatedAt: new Date(change.row.updatedAt as string),
+                },
+              });
+          }
         }
       }
-    }
+
+      await tx
+        .insert(syncMeta)
+        .values({
+          key: `pull_cursor_${deviceId}`,
+          value: JSON.stringify(pullResponse.nextCursor),
+          updatedAt: new Date(Date.now()),
+        })
+        .onConflictDoUpdate({
+          target: syncMeta.key,
+          set: {
+            value: JSON.stringify(pullResponse.nextCursor),
+            updatedAt: new Date(Date.now()),
+          },
+        });
+    });
 
     cursor = pullResponse.nextCursor;
     hasMore = pullResponse.hasMore;

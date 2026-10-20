@@ -1,21 +1,23 @@
-import { db } from '../db';
+import { db, getHLCState, saveHLCState } from '../db';
 import { inspections, observations, outbox } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { createHLCState, tick, formatHLC, type HLCState } from '@fieldlog/sync-core';
+import { tick, formatHLC, type HLCState } from '@fieldlog/sync-core';
 import type { MutationFields } from '@fieldlog/sync-core';
-
-let hlcState: HLCState = createHLCState();
 
 export function generateUUIDv7(): string {
   const timestamp = Date.now();
   const randomBytes = crypto.getRandomValues(new Uint8Array(10));
   
   const timestampHex = timestamp.toString(16).padStart(12, '0');
+  
+  randomBytes[0] = (randomBytes[0] & 0x0f) | 0x70;
+  randomBytes[2] = (randomBytes[2] & 0x3f) | 0x80;
+  
   const randomHex = Array.from(randomBytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
   
-  return `${timestampHex.slice(0, 8)}-${timestampHex.slice(8, 12)}-7${randomHex.slice(0, 3)}-${randomHex.slice(3, 7)}-${randomHex.slice(7, 19)}`;
+  return `${timestampHex.slice(0, 8)}-${timestampHex.slice(8, 12)}-${randomHex.slice(0, 4)}-${randomHex.slice(4, 8)}-${randomHex.slice(8, 20)}`;
 }
 
 export interface CreateInspectionInput {
@@ -47,7 +49,9 @@ export async function createInspection(input: CreateInspectionInput) {
   return db.transaction(async (tx: any) => {
     const id = generateUUIDv7();
     const now = Date.now();
+    const hlcState = getHLCState();
     const hlc = tick(hlcState);
+    await saveHLCState();
 
     const inspection = {
       id,
@@ -103,6 +107,7 @@ export async function updateInspection(input: UpdateInspectionInput) {
     const now = Date.now();
     const fields: MutationFields = {};
     const fieldClocks = JSON.parse(existing[0].fieldClocks as string);
+    const hlcState = getHLCState();
 
     if (input.notes !== undefined) {
       const hlc = tick(hlcState);
@@ -121,6 +126,8 @@ export async function updateInspection(input: UpdateInspectionInput) {
       fields.fruitStage = { value: input.fruitStage, hlc: formatHLC(hlc) };
       fieldClocks.fruitStage = formatHLC(hlc);
     }
+
+    await saveHLCState();
 
     await tx
       .update(inspections)
@@ -155,7 +162,9 @@ export async function createObservation(input: CreateObservationInput) {
   return db.transaction(async (tx: any) => {
     const id = generateUUIDv7();
     const now = Date.now();
+    const hlcState = getHLCState();
     const hlc = tick(hlcState);
+    await saveHLCState();
 
     const observation = {
       id,

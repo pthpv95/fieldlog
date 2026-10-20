@@ -1,14 +1,42 @@
 import { open } from '@op-engineering/op-sqlite';
 import { drizzle } from 'drizzle-orm/op-sqlite';
+import { eq } from 'drizzle-orm';
+import { createHLCState, type HLCState } from '@fieldlog/sync-core';
 import * as schema from './schema';
 
-const sqlite = open({ name: 'fieldlog.db' });
+const sqlite = open({ 
+  name: 'fieldlog.db',
+});
+
+sqlite.execute('PRAGMA journal_mode = WAL;');
+sqlite.execute('PRAGMA synchronous = NORMAL;');
+sqlite.execute('PRAGMA foreign_keys = ON;');
+sqlite.execute('PRAGMA busy_timeout = 5000;');
 
 export const db = drizzle(sqlite, { schema });
 
+const CURRENT_SCHEMA_VERSION = 1;
+
+let hlcState: HLCState = createHLCState();
+
+export function getHLCState(): HLCState {
+  return hlcState;
+}
+
 export async function initializeDatabase() {
+  const versionResult = sqlite.execute('PRAGMA user_version;');
+  const currentVersion = versionResult.rows?._array?.[0]?.user_version || 0;
+
+  if (currentVersion === 0) {
+    await runMigrationV1();
+  }
+
+  await loadHLCState();
+}
+
+async function runMigrationV1() {
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS inspections (
+    CREATE TABLE inspections (
       id TEXT PRIMARY KEY,
       org_id TEXT NOT NULL,
       block_id TEXT NOT NULL,
@@ -32,7 +60,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS observations (
+    CREATE TABLE observations (
       id TEXT PRIMARY KEY,
       inspection_id TEXT NOT NULL,
       kind TEXT NOT NULL,
@@ -56,7 +84,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS photos (
+    CREATE TABLE photos (
       id TEXT PRIMARY KEY,
       observation_id TEXT NOT NULL,
       sha256 TEXT NOT NULL,
@@ -76,7 +104,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS outbox (
+    CREATE TABLE outbox (
       mutation_id TEXT PRIMARY KEY,
       entity TEXT NOT NULL,
       entity_id TEXT NOT NULL,
@@ -93,7 +121,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS photo_queue (
+    CREATE TABLE photo_queue (
       photo_id TEXT PRIMARY KEY,
       local_uri TEXT NOT NULL,
       sha256 TEXT NOT NULL,
@@ -107,7 +135,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS sync_meta (
+    CREATE TABLE sync_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at INTEGER NOT NULL
@@ -115,7 +143,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS blocks (
+    CREATE TABLE blocks (
       id TEXT PRIMARY KEY,
       farm_id TEXT NOT NULL,
       name TEXT NOT NULL,
@@ -129,7 +157,7 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE TABLE IF NOT EXISTS farms (
+    CREATE TABLE farms (
       id TEXT PRIMARY KEY,
       org_id TEXT NOT NULL,
       name TEXT NOT NULL,
@@ -140,12 +168,40 @@ export async function initializeDatabase() {
   `);
 
   await sqlite.execute(`
-    CREATE INDEX IF NOT EXISTS idx_inspections_sync_state 
+    CREATE INDEX idx_inspections_sync_state 
     ON inspections(sync_state);
   `);
 
   await sqlite.execute(`
-    CREATE INDEX IF NOT EXISTS idx_outbox_status 
+    CREATE INDEX idx_outbox_status 
     ON outbox(status, next_attempt_at);
   `);
+
+  await sqlite.execute('PRAGMA user_version = 1;');
+}
+
+async function loadHLCState() {
+  const result = await db.select().from(schema.syncMeta).where(eq(schema.syncMeta.key, 'hlc_state')).limit(1);
+  if (result.length > 0 && result[0].value) {
+    const saved = JSON.parse(result[0].value);
+    hlcState.logicalTime = saved.logicalTime || 0;
+    hlcState.counter = saved.counter || 0;
+  }
+}
+
+export async function saveHLCState() {
+  await db
+    .insert(schema.syncMeta)
+    .values({
+      key: 'hlc_state',
+      value: JSON.stringify(hlcState),
+      updatedAt: new Date(Date.now()),
+    })
+    .onConflictDoUpdate({
+      target: schema.syncMeta.key,
+      set: {
+        value: JSON.stringify(hlcState),
+        updatedAt: new Date(Date.now()),
+      },
+    });
 }
