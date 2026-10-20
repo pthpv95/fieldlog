@@ -164,14 +164,18 @@ Per-field LWW with HLC is simpler, faster, and meets the requirements. When woul
 - **Fastify** for the Node.js API
 - **Vitest** for unit and integration tests
 
-### Mobile (Roadmap - Milestone 1+)
+### Mobile
 
-- **React Native** (bare workflow, Hermes, New Architecture)
-- **op-sqlite** + **Drizzle** for local SQLite
-- **MapLibre** for offline maps with GeoJSON block polygons
-- **react-native-vision-camera** for photo capture with GPS stamps
-- **react-native-background-fetch** for opportunistic sync
-- **expo-updates** for OTA updates
+- **React Native** with TypeScript
+- **op-sqlite** + **Drizzle** for local SQLite (implemented)
+- **Outbox pattern** with idempotency keys (implemented)
+- **Sync client** with push/pull (implemented)
+- **Inspection list and form screens** (implemented)
+- **Sync status indicators** (implemented)
+- **MapLibre** for offline maps (roadmap)
+- **react-native-vision-camera** for photos (roadmap)
+- **react-native-background-fetch** for background sync (roadmap)
+- **expo-updates** for OTA updates (roadmap)
 
 ### Web
 
@@ -301,7 +305,20 @@ apps/
       App.tsx       # Supervisor dashboard (placeholder with status cards)
   
   mobile/
-    README.md       # Roadmap notes (React Native scaffolding in milestone 1+)
+    src/
+      db/
+        schema.ts       # Drizzle schema (inspections, observations, outbox)
+        index.ts        # Database initialization
+      repositories/
+        inspections.ts  # Local-first CRUD with outbox pattern
+      sync/
+        client.ts       # Push/pull sync client
+      screens/
+        InspectionListScreen.tsx    # List with sync status
+        InspectionFormScreen.tsx    # Create/edit + observations
+      App.tsx           # Main app with navigation
+    __tests__/          # Unit tests for repositories and sync
+    package.json        # React Native + op-sqlite + Drizzle
 ```
 
 ---
@@ -344,7 +361,7 @@ LOG_LEVEL=info
 
 ## Roadmap
 
-### ✅ Milestone 0: Foundation (This PR)
+### ✅ Milestone 0/1: Foundation + Mobile Core (This PR)
 
 - [x] TypeScript monorepo (pnpm workspaces)
 - [x] `packages/domain`: Zod schemas for orchard entities
@@ -357,23 +374,23 @@ LOG_LEVEL=info
 - [x] Docker Compose (Postgres + MinIO)
 - [x] GitHub Actions CI (lint, typecheck, unit tests)
 - [x] Comprehensive README with architecture diagram
+- [x] **React Native app** with TypeScript
+- [x] **op-sqlite + Drizzle** local schema mirroring Prisma
+- [x] **Outbox table** with idempotency keys (UUIDv7)
+- [x] **Local repositories**: write = entity + outbox in one transaction
+- [x] **Sync client**: push/pull using `@fieldlog/sync-core` and `@fieldlog/api-contract`
+- [x] **Inspection list screen** with sync status pill and record badges
+- [x] **Inspection form screen** with create/edit and observations
+- [x] **Unit tests** for repositories and sync client
+- [x] Local-first: all writes save immediately, sync happens in background
 
-### ○ Milestone 1: Mobile App Scaffold
+### ○ Milestone 2: Enhanced Sync Features (Next)
 
-- [ ] React Native bare app (Hermes, New Architecture)
-- [ ] op-sqlite + Drizzle schema matching Prisma
-- [ ] Local repositories with write = entity + outbox in one transaction
-- [ ] Inspection list/detail screens with optimistic UI (live queries)
-- [ ] Basic form validation using `@fieldlog/domain` schemas
-
-### ○ Milestone 2: Sync Engine on Device
-
-- [ ] Sync engine: push outbox, pull changes, merge with `@fieldlog/sync-core`
-- [ ] Triggers: NetInfo, AppState, debounced write, BackgroundFetch
-- [ ] Single-flight mutex (no concurrent syncs)
-- [ ] Status pill: `Offline · 3 pending`, `Syncing 1/3…`, `Up to date · 2 min ago`
-- [ ] Record badges: local-only, synced, conflict, rejected
+- [ ] Sync triggers: NetInfo, AppState, debounced write
+- [ ] React Native BackgroundFetch integration
 - [ ] "Needs attention" screen for rejected mutations
+- [ ] Conflict merging on pull when local pending changes exist
+- [ ] Token refresh handling
 
 ### ○ Milestone 3: Maps & GPS
 
@@ -476,13 +493,15 @@ Alternative: PostgreSQL logical replication (more complex but scales better). Fo
 
 This is a **portfolio project** to demonstrate offline-first mobile architecture, not production software:
 
+- **Native builds not in CI**: React Native iOS/Android builds require Xcode/Android Studio, not included in GitHub Actions (lint/typecheck/test are)
 - **Single organization**: No multi-tenant admin
 - **No authentication yet**: JWT auth + optional Entra ID SSO are roadmap items
 - **Simplified RBAC**: Permission checks are implemented but not enforced end-to-end yet
 - **No offline web**: Only the mobile app works offline
-- **Demo data only**: Seed script provides one farm with three blocks
-- **No tile pack management**: Offline map tiles are a roadmap item
+- **Demo data only**: Seed script provides one farm with three blocks, mobile app uses hardcoded IDs
+- **No tile pack management**: Offline map tiles (MapLibre) are a roadmap item
 - **Photo storage**: MinIO (S3-compatible) is used; production would use AWS S3 or GCS
+- **Camera + GPS**: Photo capture and GPS-stamping are roadmap items
 
 ---
 
