@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  users       User[]
+  farms       Farm[]
+  inspections Inspection[]
+  changeLogs  ChangeLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id    String   @id @default(uuid()) @db.Uuid
+  orgId String   @map("org_id") @db.Uuid
+  email String   @unique @db.VarChar(255)
+  role  UserRole
+  name  String?  @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization        Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inspections         Inspection[]     @relation("inspector")
+  reviewedInspections Inspection[]     @relation("reviewer")
+  devices             Device[]
+  idempotencyRecords  IdempotencyRecord[]
+
+  @@index([orgId])
+  @@map("users")
+}
+
+enum UserRole {
+  INSPECTOR
+  SUPERVISOR
+  ADMIN
+}
+
+model Device {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  appVersion      String?   @map("app_version") @db.VarChar(50)
+  otaUpdateId     String?   @map("ota_update_id") @db.VarChar(100)
+  lastPulledSeq   BigInt?   @map("last_pulled_seq")
+  lastSeenAt      DateTime? @map("last_seen_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model Farm {
+  id        String   @id @default(uuid()) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String   @db.VarChar(255)
+  centroid  Json     @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  blocks       Block[]
+
+  @@index([orgId])
+  @@map("farms")
+}
+
+model Block {
+  id      String   @id @default(uuid()) @db.Uuid
+  farmId  String   @map("farm_id") @db.Uuid
+  name    String   @db.VarChar(255)
+  crop    CropType
+  variety String?  @db.VarChar(255)
+  polygon Json     @db.JsonB
+  areaHa  Float?   @map("area_ha")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  farm        Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  inspections Inspection[]
+
+  @@index([farmId])
+  @@map("blocks")
+}
+
+enum CropType {
+  DURIAN
+  MANGO
+  DRAGON_FRUIT
+  OTHER
+}
+
+model Inspection {
+  id           String            @id @default(uuid()) @db.Uuid
+  orgId        String            @map("org_id") @db.Uuid
+  blockId      String            @map("block_id") @db.Uuid
+  inspectorId  String            @map("inspector_id") @db.Uuid
+  status       InspectionStatus  @default(DRAFT)
+  fruitStage   FruitStage?       @map("fruit_stage")
+  overallScore Int?              @map("overall_score")
+  notes        String?           @db.Text
+  startedAt    DateTime          @default(now()) @map("started_at") @db.Timestamptz
+  submittedAt  DateTime?         @map("submitted_at") @db.Timestamptz
+  reviewedById String?           @map("reviewed_by_id") @db.Uuid
+  reviewedAt   DateTime?         @map("reviewed_at") @db.Timestamptz
+  fieldClocks  Json              @default("{}") @map("field_clocks") @db.JsonB
+  version      Int               @default(1)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  block        Block         @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  inspector    User          @relation("inspector", fields: [inspectorId], references: [id], onDelete: Cascade)
+  reviewer     User?         @relation("reviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  observations Observation[]
+
+  @@index([orgId])
+  @@index([blockId])
+  @@index([inspectorId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("inspections")
+}
+
+enum InspectionStatus {
+  DRAFT
+  SUBMITTED
+  REVIEWED
+  REOPENED
+}
+
+enum FruitStage {
+  FLOWERING
+  FRUIT_SET
+  DEVELOPING
+  MATURE
+  HARVEST_READY
+}
+
+model Observation {
+  id           String           @id @default(uuid()) @db.Uuid
+  inspectionId String           @map("inspection_id") @db.Uuid
+  kind         ObservationKind
+  code         String           @db.VarChar(50)
+  severity     Int?
+  count        Int?
+  lat          Float?
+  lng          Float?
+  accuracyM    Float?           @map("accuracy_m")
+  note         String?          @db.Text
+  capturedAt   DateTime         @default(now()) @map("captured_at") @db.Timestamptz
+  fieldClocks  Json             @default("{}") @map("field_clocks") @db.JsonB
+  version      Int              @default(1)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  inspection Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  photos     Photo[]
+
+  @@index([inspectionId])
+  @@index([deletedAt])
+  @@map("observations")
+}
+
+enum ObservationKind {
+  PEST
+  DISEASE
+  DAMAGE
+  YIELD
+}
+
+model Photo {
+  id            String    @id @default(uuid()) @db.Uuid
+  observationId String    @map("observation_id") @db.Uuid
+  sha256        String    @db.Char(64)
+  mime          String    @db.VarChar(50)
+  width         Int
+  height        Int
+  storageKey    String?   @map("storage_key") @db.VarChar(255)
+  capturedAt    DateTime  @default(now()) @map("captured_at") @db.Timestamptz
+  lat           Float?
+  lng           Float?
+  uploadedAt    DateTime? @map("uploaded_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@unique([sha256])
+  @@index([observationId])
+  @@map("photos")
+}
+
+model ChangeLog {
+  seq       BigInt   @id @default(autoincrement())
+  orgId     String   @map("org_id") @db.Uuid
+  entity    String   @db.VarChar(50)
+  entityId  String   @map("entity_id") @db.Uuid
+  version   Int
+  op        String   @db.VarChar(20)
+  changedAt DateTime @default(now()) @map("changed_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, seq])
+  @@map("change_log")
+}
+
+model IdempotencyRecord {
+  mutationId  String   @id @map("mutation_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  deviceId    String   @map("device_id") @db.Uuid
+  requestHash String   @map("request_hash") @db.VarChar(64)
+  result      Json     @db.JsonB
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("idempotency_records")
+}
+
+model ConflictRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  entity         String   @db.VarChar(50)
+  entityId       String   @map("entity_id") @db.Uuid
+  field          String   @db.VarChar(100)
+  winningValue   Json     @map("winning_value") @db.JsonB
+  losingValue    Json     @map("losing_value") @db.JsonB
+  winningHlc     String   @map("winning_hlc") @db.VarChar(50)
+  losingHlc      String   @map("losing_hlc") @db.VarChar(50)
+  losingDeviceId String?  @map("losing_device_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("conflict_records")
+}
